@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Norvik RPG</title>
+<style>
+:root{--gold:#e7bd72;--panel:#17241f;--ink:#f4ead4}
+*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#101820;color:var(--ink);font-family:system-ui, sans-serif;touch-action:none}
+#game{position:relative;width:100%;height:100%;display:flex;flex-direction:column}
+#top{height:42px;display:flex;align-items:center;justify-content:space-between;padding:4px 12px;background:#101820;border-bottom:1px solid #425448;font-size:12px;gap:8px}
+.brand{font-weight:900;letter-spacing:2px;color:var(--gold)}#stats{display:flex;gap:10px;white-space:nowrap}
+#scene{position:relative;flex:1;min-height:0;background:#233c31}canvas{display:block;width:100%;height:100%;image-rendering:pixelated}
+#hud{position:absolute;left:8px;top:8px;background:#101820d9;border:1px solid #64735b;border-radius:8px;padding:7px 9px;font-size:11px;max-width:52%;pointer-events:none}
+#message{position:absolute;top:8px;left:50%;transform:translateX(-50%);background:#101820e8;border:1px solid #b08b4b;border-radius:8px;padding:8px 12px;font-size:12px;text-align:center;max-width:65%;display:none}
+#bottom{min-height:96px;background:#101820;border-top:1px solid #425448;display:flex;align-items:center;justify-content:space-between;padding:8px 12px;gap:12px}
+#pad{display:grid;grid-template-columns:42px 42px 42px;grid-template-rows:32px 32px;gap:3px;flex-shrink:0}
+.ctrl{background:#293a35;color:#f8e8c7;border:1px solid #667b65;border-radius:8px;font-size:19px;touch-action:none}
+#up{grid-column:2}#left{grid-column:1;grid-row:2}#down{grid-column:2;grid-row:2}#right{grid-column:3;grid-row:2}
+#actions{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:6px;max-width:65%}
+.action{border:1px solid #8d7041;background:#26372e;color:#ffe4a9;border-radius:8px;padding:9px 11px;font-size:12px;font-weight:700}
+#overlay{position:absolute;inset:0;background:#09110ee8;display:none;align-items:center;justify-content:center;padding:14px}
+.card{background:#17241f;border:1px solid #b08b4b;border-radius:12px;width:min(520px,96%);max-height:95%;overflow:auto;padding:16px;box-shadow:0 8px 30px #0008}
+h2{margin:0 0 8px;color:var(--gold);font-size:20px}.muted{color:#b9c3b4;font-size:12px;line-height:1.45}.entry{padding:8px 0;border-bottom:1px solid #405147;font-size:13px}.row{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+button:active{filter:brightness(1.25);transform:scale(.98)}
+@media(min-width:700px){#bottom{min-height:102px}#top{height:48px;font-size:14px}.action{font-size:13px;padding:10px 14px}#hud{font-size:13px}}
+</style>
+</head>
+<body>
+<div id="game">
+ <div id="top"><div class="brand">NORVIK <span style="font-weight:400;color:#d4d8ca;letter-spacing:0">· RPG 1.0</span></div><div id="stats"><span id="hp">♥ 100/100</span><span id="gold">◈ 120 oro</span><span id="clock">Día 1 · 08:00</span></div></div>
+ <div id="scene"><canvas id="world"></canvas><div id="hud">Norvik · Plaza del pueblo<br>Explora y habla con sus habitantes.</div><div id="message"></div></div>
+ <div id="bottom">
+  <div id="pad"><button class="ctrl" id="up">▲</button><button class="ctrl" id="left">◀</button><button class="ctrl" id="down">▼</button><button class="ctrl" id="right">▶</button></div>
+  <div id="actions"><button class="action" onclick="interact()">Hablar / usar</button><button class="action" onclick="showPanel('inventory')">Mochila</button><button class="action" onclick="showPanel('quests')">Misiones</button><button class="action" onclick="showPanel('map')">Mapa</button><button class="action" onclick="saveGame()">Guardar</button></div>
+ </div>
+ <div id="overlay"><div class="card" id="card"></div></div>
+</div>
+<script>
+(()=> {
+const canvas=document.getElementById('world'),ctx=canvas.getContext('2d');
+const TILE=32, W=44,H=34;
+let map=[], camera={x:0,y:0}, held={};
+let state={x:9,y:9,hp:100,maxHp:100,gold:120,day:1,minute:480,inventory:{'Pan':5,'Poción':2,'Espada':1},quests:{goods:0},xp:0,seen:[],lastTalk:'',steps:0};
+const names=['Norvik','Bosque Negro','Puerto Gris','Minas Viejas','Ruinas Antiguas'];
+const areas=[
+ {x:0,y:0,w:44,h:34,name:'Bosque y caminos'},
+ {x:5,y:5,w:11,h:9,name:'Norvik'},
+ {x:29,y:5,w:10,h:8,name:'Puerto Gris'},
+ {x:20,y:24,w:9,h:7,name:'Minas Viejas'}
+];
+function rand(n){return Math.floor(Math.random()*n)}
+function generate(){
+ map=Array.from({length:H},(_,y)=>Array.from({length:W},(_,x)=>{
+  let r=Math.random(); return r<.12?1:r<.20?2:0;
+ }));
+ // paths between locations
+ for(let x=9;x<34;x++)for(let y=10;y<=11;y++)map[y][x]=3;
+ for(let y=10;y<27;y++)for(let x=31;x<=32;x++)map[y][x]=3;
+ for(let x=24;x<33;x++)for(let y=26;y<=27;y++)map[y][x]=3;
+ // villages cleared and paths
+ for(let y=5;y<15;y++)for(let x=5;x<17;x++)map[y][x]=0;
+ for(let y=5;y<14;y++)for(let x=29;x<40;x++)map[y][x]=0;
+ for(let y=24;y<32;y++)for(let x=20;x<29;x++)map[y][x]=0;
+ for(let x=7;x<15;x++)map[10][x]=3;
+ // buildings / rocks
+ for(let [x,y] of [[6,6],[12,6],[6,12],[14,12],[30,6],[37,6],[30,11],[37,11],[21,25],[26,25]])map[y][x]=4;
+ // trees border around clearings
+ for(let y=4;y<16;y++)for(let x=4;x<18;x++)if((x===4||x===17||y===4||y===15)&&map[y][x]!==4)map[y][x]=1;
+ for(let y=4;y<15;y++)for(let x=28;x<41;x++)if((x===28||x===40||y===4||y===14)&&map[y][x]!==4)map[y][x]=1;
+ // unique landmarks
+}
+const npcs=[
+ {x:10,y:8,name:'Aldric',color:'#d7b06a',line:'El camino al Puerto Gris sigue hacia el este. Un mercader perdió unas mercancías.',kind:'quest'},
+ {x:13,y:10,name:'Mara',color:'#d88b91',line:'Si vas al bosque, mantente cerca del sendero. Se oyen ruidos por la noche.',kind:'healer'},
+ {x:34,y:9,name:'Viktor',color:'#9bb6cb',line:'Soy el encargado del puerto. Si encuentras el paquete perdido, te pagaré 60 monedas.',kind:'merchant'},
+ {x:24,y:28,name:'Doran',color:'#b8a18b',line:'Las minas están abandonadas, pero aún se pueden encontrar minerales.',kind:'miner'}
+];
+let monsters=[{x:20,y:17,hp:25,alive:true,name:'Lobo'},{x:25,y:14,hp:25,alive:true,name:'Lobo'},{x:34,y:21,hp:32,alive:true,name:'Bandido'}];
+function resize(){const r=canvas.getBoundingClientRect();canvas.width=Math.max(1,Math.floor(r.width*devicePixelRatio));canvas.height=Math.max(1,Math.floor(r.height*devicePixelRatio));ctx.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0);draw()}
+window.addEventListener('resize',resize);
+function tileColor(t){return ['#426b45','#244a34','#4b655e','#ad9564','#75634e'][t]||'#426b45'}
+function draw(){
+ const cw=canvas.clientWidth,ch=canvas.clientHeight, cols=Math.ceil(cw/TILE)+2,rows=Math.ceil(ch/TILE)+2;
+ camera.x=Math.max(0,Math.min(W*TILE-cw,state.x*TILE-cw/2));
+ camera.y=Math.max(0,Math.min(H*TILE-ch,state.y*TILE-ch/2));
+ ctx.clearRect(0,0,cw,ch);
+ let sx=Math.floor(camera.x/TILE),sy=Math.floor(camera.y/TILE);
+ for(let ty=sy;ty<Math.min(H,sy+rows);ty++)for(let tx=sx;tx<Math.min(W,sx+cols);tx++){
+  const px=tx*TILE-camera.x,py=ty*TILE-camera.y,t=map[ty][tx];
+  ctx.fillStyle=tileColor(t);ctx.fillRect(px,py,TILE,TILE);
+  ctx.strokeStyle='#ffffff0b';ctx.strokeRect(px,py,TILE,TILE);
+  if(t===1){ctx.fillStyle='#173c2b';ctx.beginPath();ctx.moveTo(px+16,py+3);ctx.lineTo(px+4,py+24);ctx.lineTo(px+28,py+24);ctx.fill();ctx.fillStyle='#79583b';ctx.fillRect(px+13,py+23,6,8)}
+  if(t===2){ctx.fillStyle='#7f9d94';ctx.beginPath();ctx.ellipse(px+16,py+17,11,6,0,0,7);ctx.fill()}
+  if(t===3){ctx.fillStyle='#d6bd88';ctx.fillRect(px,py+8,TILE,16);ctx.fillStyle='#f0d7a4';ctx.fillRect(px,py+13,TILE,3)}
+  if(t===4){ctx.fillStyle='#51463a';ctx.fillRect(px+3,py+7,26,23);ctx.fillStyle='#8b493d';ctx.beginPath();ctx.moveTo(px,py+8);ctx.lineTo(px+16,py-3);ctx.lineTo(px+32,py+8);ctx.fill();ctx.fillStyle='#d8c49c';ctx.fillRect(px+12,py+17,8,13)}
+ }
+ for(const n of npcs){let px=n.x*TILE-camera.x,py=n.y*TILE-camera.y;if(px>-TILE&&py>-TILE&&px<cw&&py<ch){ctx.fillStyle=n.color;ctx.beginPath();ctx.arc(px+16,py+14,8,0,7);ctx.fill();ctx.fillStyle='#352b25';ctx.fillRect(px+9,py+22,14,9);ctx.fillStyle='#fff4d9';ctx.font='10px sans-serif';ctx.textAlign='center';ctx.fillText(n.name,px+16,py+2)}}
+ for(const m of monsters.filter(m=>m.alive)){let px=m.x*TILE-camera.x,py=m.y*TILE-camera.y;if(px>-TILE&&py>-TILE&&px<cw&&py<ch){ctx.fillStyle='#9b5148';ctx.beginPath();ctx.arc(px+16,py+17,11,0,7);ctx.fill();ctx.fillStyle='#ffe8c7';ctx.fillRect(px+10,py+14,3,3);ctx.fillRect(px+19,py+14,3,3)}}
+ let px=state.x*TILE-camera.x,py=state.y*TILE-camera.y;
+ ctx.fillStyle='#e8c36d';ctx.beginPath();ctx.arc(px+16,py+13,8,0,7);ctx.fill();ctx.fillStyle='#344b76';ctx.fillRect(px+8,py+21,16,10);ctx.fillStyle='#f4ead4';ctx.fillRect(px+12,py+9,3,3);ctx.fillRect(px+19,py+9,3,3);
+ ctx.textAlign='left';
+}
+function tileAt(x,y){return x<0||y<0||x>=W||y>=H?1:map[y][x]}
+function canMove(x,y){return tileAt(x,y)!==1&&tileAt(x,y)!==4}
+function move(dx,dy){
+ const nx=state.x+dx,ny=state.y+dy;if(!canMove(nx,ny)){toast('El terreno bloquea el paso.');return}
+ state.x=nx;state.y=ny;state.minute+=2;state.steps++;
+ if(state.minute>=1440){state.day++;state.minute-=1440}
+ const m=monsters.find(m=>m.alive&&Math.abs(m.x-nx)+Math.abs(m.y-ny)===0);
+ if(m)fight(m);
+ updateUI();draw();saveQuiet();
+}
+function fight(m){
+ const dmg=10+rand(7);m.hp-=dmg;
+ if(m.hp<=0){m.alive=false;state.gold+=12;state.xp+=10;toast('Derrotaste a '+m.name+'. +12 oro y +10 XP.')}
+ else {let hurt=4+rand(7);state.hp=Math.max(1,state.hp-hurt);toast(m.name+' recibe '+dmg+' daño. Te hiere: -'+hurt+' HP.')}
+ if(state.hp<=1){state.hp=50;state.x=9;state.y=9;state.gold=Math.max(0,state.gold-10);toast('Te rescataron en Norvik. Perdiste 10 oro.')}
+}
+function toast(s){let e=document.getElementById('message');e.textContent=s;e.style.display='block';clearTimeout(toast.timer);toast.timer=setTimeout(()=>e.style.display='none',2800)}
+function updateUI(){document.getElementById('hp').textContent='♥ '+state.hp+'/'+state.maxHp;document.getElementById('gold').textContent='◈ '+state.gold+' oro';document.getElementById('clock').textContent='Día '+state.day+' · '+String(Math.floor(state.minute/60)).padStart(2,'0')+':'+String(state.minute%60).padStart(2,'0');
+ let area=state.x<18&&state.y<17?'Norvik':state.x>28&&state.y<16?'Puerto Gris':state.y>23?'Minas Viejas':'Bosque Negro';
+ document.getElementById('hud').innerHTML='<b>'+area+'</b><br>Posición '+state.x+', '+state.y+' · Nivel '+(1+Math.floor(state.xp/50))+'<br>Explora, habla y completa encargos.'}
+function nearestNPC(){return npcs.find(n=>Math.abs(n.x-state.x)+Math.abs(n.y-state.y)<=2)}
+function interact(){
+ const n=nearestNPC();if(n){
+  state.lastTalk=n.name;
+  let extra='';
+  if(n.kind==='quest'){
+   if(state.quests.goods===0)extra='<div class="row"><button class="action" onclick="acceptQuest()">Aceptar encargo</button></div>';
+   else if(state.quests.goods===1)extra='<div class="row"><button class="action" onclick="completeQuest()">Entregar mercancías</button></div>';
+   else extra='<p class="muted">Gracias por tu ayuda. La gente del pueblo ya confía más en ti.</p>';
+  } else if(n.kind==='healer')extra='<div class="row"><button class="action" onclick="heal()">Descansar y curarse · 15 oro</button></div>';
+  else if(n.kind==='merchant')extra='<div class="row"><button class="action" onclick="buyPotion()">Comprar poción · 20 oro</button><button class="action" onclick="completeQuest()">Preguntar por el paquete</button></div>';
+  openPanel('<h2>'+n.name+'</h2><p>'+n.line+'</p>'+extra+'<div class="row"><button class="action" onclick="closePanel()">Cerrar</button></div>');
+  return;
+ }
+ const m=monsters.find(m=>m.alive&&Math.abs(m.x-state.x)+Math.abs(m.y-state.y)<=1);
+ if(m){fight(m);updateUI();draw();return}
+ if(state.inventory['Poción']>0&&state.hp<state.maxHp){state.inventory['Poción']--;state.hp=Math.min(state.maxHp,state.hp+35);toast('Usaste una poción: +35 HP.');updateUI();saveQuiet();return}
+ toast('No hay nadie cerca. Explora el camino y busca habitantes.');
+}
+window.acceptQuest=()=>{state.quests.goods=1;closePanel();toast('Misión aceptada: encuentra a Viktor en Puerto Gris.');saveQuiet()};
+window.completeQuest=()=>{if(state.quests.goods===1&&state.lastTalk==='Viktor'){state.quests.goods=2;state.gold+=60;state.xp+=25;toast('Encargo completado: +60 oro, +25 XP.');closePanel();updateUI();saveQuiet()}else if(state.quests.goods===1){toast('Viktor está en Puerto Gris.');}else toast('No tienes un encargo pendiente para entregar.');};
+window.heal=()=>{if(state.gold<15){toast('No tienes suficiente oro.');return}state.gold-=15;state.hp=state.maxHp;closePanel();updateUI();toast('Descansaste. Salud restaurada.');saveQuiet()};
+window.buyPotion=()=>{if(state.gold<20){toast('No tienes suficiente oro.');return}state.gold-=20;state.inventory['Poción']=(state.inventory['Poción']||0)+1;closePanel();updateUI();toast('Compraste una poción.');saveQuiet()};
+function openPanel(html){document.getElementById('card').innerHTML=html;document.getElementById('overlay').style.display='flex'}
+function closePanel(){document.getElementById('overlay').style.display='none'}
+window.closePanel=closePanel;
+window.gameBack=()=>{if(document.getElementById('overlay').style.display==='flex')closePanel();else showPanel('menu')};
+window.showPanel=(type)=>{
+ if(type==='inventory'){let html='<h2>Mochila</h2>';for(let k in state.inventory)html+='<div class="entry">'+k+' <b style="float:right">× '+state.inventory[k]+'</b></div>';html+='<p class="muted">La espada permite luchar. Las pociones recuperan salud al usar «Hablar / usar» cuando no hay personajes cerca.</p>';openPanel(html+'<div class="row"><button class="action" onclick="closePanel()">Volver</button></div>')}
+ else if(type==='quests'){let q=state.quests.goods;openPanel('<h2>Diario de misiones</h2><div class="entry"><b>Las mercancías desaparecidas</b><br>'+(q===0?'Aldric puede contarte qué ocurrió. (No aceptada)':q===1?'Habla con Viktor en Puerto Gris y entrega el encargo.':'Completada · recompensa recibida')+'</div><div class="entry"><b>Exploración</b><br>Camina por el bosque y descubre nuevas regiones.</div><div class="row"><button class="action" onclick="closePanel()">Volver</button></div>')}
+ else if(type==='map'){openPanel('<h2>Mapa del mundo</h2><pre style="font-size:12px;line-height:1.5;color:#d7d9bb">N  Bosque Negro\n   🌲 🌲 · · · · · · ·\n   · [NORVIK] ======== [PUERTO GRIS]\n   ·   Aldric          Viktor\n   ·      \\             |\n   ·       \\            |\n   ·        ======= [MINAS VIEJAS]\n   ·            Doran\n\nTu posición: '+state.x+', '+state.y+'</pre><p class="muted">Las líneas indican los caminos principales. El mundo se explora caminando.</p><div class="row"><button class="action" onclick="closePanel()">Volver</button></div>')}
+ else openPanel('<h2>Norvik RPG</h2><p>RPG 2D de mundo abierto · modo sin conexión.</p><div class="row"><button class="action" onclick="closePanel()">Continuar</button><button class="action" onclick="newGame()">Nueva partida</button></div>');
+};
+window.newGame=()=>{localStorage.removeItem('norvik-save');state={x:9,y:9,hp:100,maxHp:100,gold:120,day:1,minute:480,inventory:{'Pan':5,'Poción':2,'Espada':1},quests:{goods:0},xp:0,seen:[],lastTalk:'',steps:0};monsters.forEach(m=>{m.alive=true;m.hp=25});closePanel();updateUI();draw();saveQuiet();toast('Nueva partida iniciada.')};
+function saveQuiet(){try{localStorage.setItem('norvik-save',JSON.stringify({state,monsters:monsters.map(m=>({x:m.x,y:m.y,hp:m.hp,alive:m.alive}))}))}catch(e){}}
+window.saveGame=()=>{saveQuiet();toast('Partida guardada en este dispositivo.')};
+function loadGame(){try{let s=JSON.parse(localStorage.getItem('norvik-save'));if(s&&s.state){state=s.state;if(s.monsters)s.monsters.forEach((v,i)=>{if(monsters[i])Object.assign(monsters[i],v)})}}catch(e){}}
+document.querySelectorAll('.ctrl').forEach(b=>{const dirs={up:[0,-1],down:[0,1],left:[-1,0],right:[1,0]},id=b.id;const start=e=>{e.preventDefault();move(...dirs[id]);held[id]=setInterval(()=>move(...dirs[id]),170)};const stop=e=>{e.preventDefault();clearInterval(held[id]);delete held[id]};b.addEventListener('pointerdown',start);['pointerup','pointercancel','pointerleave'].forEach(ev=>b.addEventListener(ev,stop))});
+window.addEventListener('keydown',e=>{const d={ArrowUp:[0,-1],w:[0,-1],ArrowDown:[0,1],s:[0,1],ArrowLeft:[-1,0],a:[-1,0],ArrowRight:[1,0],d:[1,0]};if(d[e.key]){e.preventDefault();move(...d[e.key])}if(e.key==='Escape')gameBack();if(e.key===' '||e.key==='Enter')interact()});
+generate();loadGame();updateUI();resize();draw();
+})();
+</script>
+</body></html>
